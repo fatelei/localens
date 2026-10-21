@@ -6,4 +6,4 @@ import "golang.design/x/hotkey"
 
 func shortcutMetaModifier() (hotkey.Modifier, string) { return hotkey.Mod4, "Super" }
 
-func shortcutAltModifier() hotkey.Modifier { return hotkey.ModAlt }
+func shortcutAltModifier() hotkey.Modifier { return hotkey.Mod1 }
