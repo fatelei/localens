@@ -1,0 +1,11 @@
+# Content retrieval design
+
+Use a compact FTS5 trigram index with external content and detail=none. The normalized text is exposed by a view over files.body, so the index does not duplicate document text. Queries build quoted three-character tokens as a candidate prefilter; existing Unicode literal matching and full-phrase ranking verify candidates. A second compact postings index encodes non-ASCII single/two-character terms, including short Chinese queries. Very short Latin terms retain the existing filename policy (or image-text fallback when explicitly filtering images). Stable explicit document IDs keep postings valid across database compaction; the index never relies on files.rowid. Filename candidates remain included so mixed filename/body terms keep working.
+
+A durable pending queue backfills existing nonempty bodies in small transactions, newest files first. Insert/update/delete triggers keep subsequent changes consistent. Searches include pending rows in their fallback until backfill completes, avoiding missing results during migration. Closing cancels and joins the background worker before closing SQLite. Statistics expose pending content and OCR work. No original files are modified.
+
+On macOS, Vision recognizes text locally from bounded ImageIO thumbnails. A background queue processes unrecognized indexed images and stores bounded OCR text in files.body. A persisted OCR version marks empty or failed recognition so it is not retried on every scan. Image vectors remain intact. File modification resets OCR state; committing recognition verifies path/size/mtime/placeholder to reject stale work. Other platforms report OCR unavailable and retain filename/semantic image search.
+
+The release enables SQLite FTS5 in the native macOS driver; portable builds use the existing FTS5-capable driver. Verify both build paths, migration/restart consistency, literal punctuation and Unicode phrases, indexing updates/deletes, stale OCR, actual OCR fixtures, and timing/storage growth on the real app-owned index.
+
+Schema version 1 migrates older unversioned single-index layouts transactionally, preserving original bodies and vectors. Unknown schema versions fail explicitly rather than attempting a downgrade.

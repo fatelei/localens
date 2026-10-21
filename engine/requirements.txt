@@ -1,0 +1,4 @@
+sentence-transformers[image]>=6.1,<7
+transformers>=5.19,<6
+torch>=2.8,<3
+Pillow>=11,<13

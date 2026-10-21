@@ -1,0 +1,27 @@
+{
+  "model": "google/embeddinggemma-2",
+  "offline": true,
+  "dimensions": 256,
+  "device": "cpu",
+  "dtype": "float32",
+  "versions": {
+    "sentence-transformers": "6.1.0",
+    "transformers": "5.19.0",
+    "torch": "2.14.1"
+  },
+  "comparisons": {
+    "rent_related": 0.8388441913717417,
+    "rent_unrelated": 0.5750874868401002,
+    "image_related": 0.6735636728661065,
+    "image_unrelated": 0.6054374862635755
+  },
+  "timings_seconds": {
+    "rent_query": 0.193,
+    "rent_doc": 0.057,
+    "other_doc": 0.038,
+    "image": 1.076,
+    "image_query": 0.035,
+    "other_image_query": 0.036
+  },
+  "passed": true
+}

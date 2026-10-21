@@ -1,0 +1,11 @@
+.venv/
+build/bin/
+frontend/wailsjs/
+__pycache__/
+*.db
+*.db-shm
+*.db-wal
+.DS_Store
+.models/
+dist/
+work/

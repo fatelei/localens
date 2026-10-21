@@ -1,0 +1,12 @@
+Shiwa includes a local CPython 3.12 runtime and Python inference dependencies.
+Their license and copyright files are retained within python/ and the installed
+site-packages/*.dist-info directories. PyTorch, SentenceTransformers,
+Transformers, NumPy, Pillow and their transitive dependencies retain their
+original respective licenses. The runtime is the uv Python standalone build.
+
+Model: google/embeddinggemma-2
+Revision: 914f7f89142e33e77833254d9c9b90c3cef7303b
+Model card and notices: model/README.md
+Source: https://huggingface.co/google/embeddinggemma-2
+The model card identifies the Apache License 2.0. Model weights are included
+for local offline inference. No user documents are sent to an inference service.

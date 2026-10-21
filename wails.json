@@ -1,0 +1,12 @@
+{
+  "$schema": "https://wails.io/schemas/config.v2.json",
+  "name": "Shiwa",
+  "outputfilename": "Shiwa",
+  "frontend:dir": "frontend",
+  "frontend:install": "",
+  "frontend:build": "",
+  "frontend:dev:watcher": "",
+  "frontend:dev:serverUrl": "",
+  "author": {"name": "Shiwa", "email": ""},
+  "info": {"companyName": "Shiwa", "productName": "拾物", "productVersion": "0.1.1", "copyright": "Shiwa", "comments": "Local file and semantic search"}
+}

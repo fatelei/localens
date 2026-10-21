@@ -1,0 +1,78 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  checks:
+    uses: ./.github/workflows/checks.yml
+    with:
+      version: ${{ github.ref_name }}
+      full_release: true
+
+  publish:
+    needs: checks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          pattern: release-*
+          path: dist
+          merge-multiple: true
+      - name: Verify all five complete packages and aggregate checksums
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          python3 - <<'PY'
+          import hashlib, json, os, pathlib, re
+          tag = os.environ['RELEASE_TAG']
+          if not re.fullmatch(r'v\d+\.\d+\.\d+(?:-[0-9A-Za-z][0-9A-Za-z.-]*)?(?:\+[0-9A-Za-z.-]+)?', tag):
+              raise SystemExit('Invalid release tag')
+          root = pathlib.Path('dist')
+          targets = (('windows', 'amd64'), ('windows', 'arm64'), ('linux', 'amd64'), ('linux', 'arm64'), ('macos', 'arm64'))
+          expected = {f'Shiwa-{tag}-{system}-{arch}-full' + ('.tar.gz' if system == 'linux' else '.zip')
+                      for system, arch in targets}
+          actual = {p.name for p in root.iterdir() if p.name.endswith(('.zip', '.tar.gz'))}
+          if actual != expected:
+              raise SystemExit(f'Incomplete release: expected {sorted(expected)}, got {sorted(actual)}')
+          lines = []
+          for name in sorted(expected):
+              h = hashlib.sha256()
+              with (root / name).open('rb') as stream:
+                  for block in iter(lambda: stream.read(1024 * 1024), b''):
+                      h.update(block)
+              line = f'{h.hexdigest()}  {name}\n'
+              if (root / (name + '.sha256')).read_text() != line:
+                  raise SystemExit(f'Checksum mismatch: {name}')
+              report = json.loads((root / (name + '.smoke.json')).read_text())
+              if not all(report.get(key) is True for key in ('offline', 'query', 'text', 'image')) or report.get('socket_access') != 'denied' or report.get('dimensions') != 256:
+                  raise SystemExit(f'Missing offline inference proof: {name}')
+              if report.get('version') != tag or report.get('model_revision') != '914f7f89142e33e77833254d9c9b90c3cef7303b':
+                  raise SystemExit(f'Unexpected model/version: {name}')
+              if f'Shiwa-{tag}-{report.get("system")}-{report.get("arch")}-full' not in name:
+                  raise SystemExit(f'Wrong smoke-test target: {name}')
+              lines.append(line)
+          (root / 'SHA256SUMS').write_text(''.join(lines))
+          PY
+      - name: Publish release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          flags=()
+          release_core="${RELEASE_TAG%%+*}"
+          if [[ "$release_core" == *-* ]]; then flags+=(--prerelease); fi
+          gh release create "$RELEASE_TAG" dist/*.zip dist/*.tar.gz dist/SHA256SUMS dist/*.smoke.json \
+            --verify-tag --generate-notes --title "拾物 $RELEASE_TAG" "${flags[@]}"
