@@ -30,6 +30,27 @@ do not mask the original build exception. This happens on CI, never on the user 
 
 Only after every target succeeds does the publication job verify the exact set of five `-full` archives, checksums and inference reports. It publishes archives, `SHA256SUMS` and `.smoke.json` reports. Prerelease tags produce prereleases. Actions are commit-pinned, with weekly Dependabot updates. Only the publication job receives repository write permission.
 
+## Retrying publication
+
+Publication preserves an existing Release and uploads only missing verified assets.
+Identical assets are skipped using GitHub's SHA-256 digest; differing or unverifiable
+existing assets stop publication instead of being overwritten. Release titles,
+notes, draft state and prerelease state are preserved.
+
+If all five native package jobs succeeded but publication failed, recover those
+artifacts without rebuilding or moving the tag:
+
+```sh
+gh workflow run release.yml --ref main \
+  -f release_tag=v1.0.0 -f source_run_id=YOUR_RELEASE_RUN_ID
+```
+
+Recovery accepts only a completed tag-triggered Release run from the same repository,
+with a commit matching the current tag and all five package jobs plus lint successful.
+It rechecks package hashes and offline inference reports before uploading. Artifacts
+must still be retained. Rerunning an older workflow uses its original code; use the
+manual recovery entry point on `main` to apply publication fixes.
+
 ## Installation and platform requirements
 
 - Windows: extract the ZIP and run `Shiwa.exe`. Keep the adjacent `Resources` directory. The system Microsoft WebView2 Runtime is required for the desktop UI. Packages are unsigned portable archives.
