@@ -14,9 +14,17 @@ macOS Intel is excluded. All five jobs use native runners. Put the source direct
 
 Every branch push and pull request runs formatting/syntax checks, actionlint, Go vet/tests, frontend regressions and packaging regressions, then builds the native application. Linux/macOS include race detection. Linux tests use Xvfb because the global shortcut backend uses X11. Routine CI does not upload incomplete application packages.
 
+Manual CI runs accept `full_release=true` to prepare and test all five complete
+offline packages without creating a GitHub Release. This is the release rehearsal
+path; ordinary pushes still run checks and native builds only.
+
 ## Release gates
 
-Push a tag such as `v0.1.0` to run the same checks, prepare the full assets on each native runner and package all five targets. `scripts/runtime_bundle.py` uses a pinned uv version and managed standalone CPython, resolves binary-only CPU dependencies constrained by `engine/requirements-lock.txt`, writes a platform-specific hash lock, installs with required hashes, and downloads model revision `914f7f89142e33e77833254d9c9b90c3cef7303b`. Windows ARM64 lacks a matching upstream torchvision wheel, so that runner builds version 0.29.1 from pinned official commit `1f1a920d685d46dfbe187934b785b7ecb7a182f2` using native MSVC ARM64 tools before resolving/installing the hashed wheel set. This happens on CI, never on the user device. Dependency or model download failures fail the job; there is no incomplete-package fallback. Newly prepared assets retain `requirements-resolved.txt` for auditing platform-specific transitive dependencies. Build infrastructure needs access to the official Python/PyTorch/model hosting services.
+Push a tag such as `v0.1.0` to run the same checks, prepare the full assets on each native runner and package all five targets. `scripts/runtime_bundle.py` uses a pinned uv version and managed standalone CPython, resolves binary-only CPU dependencies constrained by `engine/requirements-lock.txt`, writes a platform-specific hash lock, installs with required hashes, and downloads model revision `914f7f89142e33e77833254d9c9b90c3cef7303b`. Windows ARM64 lacks a matching upstream torchvision wheel, so that runner builds version 0.29.1 from pinned official commit `1f1a920d685d46dfbe187934b785b7ecb7a182f2` using native MSVC ARM64 tools before resolving/installing the hashed wheel set.
+Windows Python requests specify the target architecture explicitly, and the staged
+interpreter build is checked before dependency installation. The native MSVC
+environment is reused with `DISTUTILS_USE_SDK=1`. Temporary DLL cleanup failures
+do not mask the original build exception. This happens on CI, never on the user device. Dependency or model download failures fail the job; there is no incomplete-package fallback. Newly prepared assets retain `requirements-resolved.txt` for auditing platform-specific transitive dependencies. Build infrastructure needs access to the official Python/PyTorch/model hosting services.
 
 `scripts/package_release.py` accepts only complete assets and verifies application/Python architectures. It rebuilds the bundle from known files, includes the model and dependency license notices, and signs embedded macOS binaries before sealing the app. It then exercises the relocated bundled Python through the same worker used by the application. An empty model cache, offline flags and denied socket connections enforce the offline inference test. Query, text and image requests must each return a normalized 256-dimensional vector. Failure prevents archive creation.
 

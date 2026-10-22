@@ -23,6 +23,15 @@ def python_path(resources, system=None):
     return resources / 'python' / ('python.exe' if system == 'win32' else 'bin/python3')
 
 
+def verify_windows_python(python, arch, env):
+    expected = {'aarch64': 'win-arm64', 'x86_64': 'win-amd64'}[arch]
+    # sysconfig describes the interpreter build, unlike the emulating host OS.
+    actual = subprocess.check_output([str(python), '-c',
+        'import sysconfig; print(sysconfig.get_platform())'], env=env, text=True).strip().lower()
+    if actual != expected:
+        raise ValueError(f'Expected native Python {expected}, got {actual}')
+
+
 
 def msvc_environment(env):
     installer = Path(os.environ.get('ProgramFiles(x86)', 'C:/Program Files (x86)')) / 'Microsoft Visual Studio/Installer/vswhere.exe'
@@ -62,7 +71,7 @@ def build_windows_arm_vision(python, temporary, env, uv):
     if revision != VISION_REVISION:
         raise ValueError('Unexpected torchvision source revision')
     build_env = msvc_environment(env)
-    build_env.update(PYTHONHOME=str(python.parent), BUILD_VERSION='0.29.1', MAX_JOBS='2',
+    build_env.update(PYTHONHOME=str(python.parent), DISTUTILS_USE_SDK='1', BUILD_VERSION='0.29.1', MAX_JOBS='2',
         FORCE_CUDA='0', TORCHVISION_USE_PNG='0', TORCHVISION_USE_JPEG='0',
         TORCHVISION_USE_WEBP='0', TORCHVISION_USE_NVJPEG='0')
     wheels = Path(temporary) / 'wheels'
@@ -77,7 +86,9 @@ def prepare(output):
     if output.exists():
         raise ValueError(f'Refusing to overwrite assets: {output}')
     output.parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory(prefix='shiwa-assets-', dir=output.parent) as temporary:
+    # Windows may retain a DLL handle briefly after a failed compiler process.
+    # Cleanup must not replace the original build exception with WinError 5.
+    with tempfile.TemporaryDirectory(prefix='shiwa-assets-', dir=output.parent, ignore_cleanup_errors=True) as temporary:
         stage = Path(temporary) / 'Resources'
         stage.mkdir()
         env = os.environ.copy()
@@ -90,7 +101,15 @@ def prepare(output):
         uv = Path(subprocess.check_output([sys.executable, '-c', locate], text=True).strip())
         if not uv.is_file():
             raise ValueError('Missing private uv build tool')
-        subprocess.run([str(uv), 'python', 'install', PYTHON_VERSION, '--no-bin', '--no-registry'], env=env, check=True)
+        request = PYTHON_VERSION
+        windows_arch = None
+        if sys.platform == 'win32':
+            windows_arch = {'arm64': 'aarch64', 'aarch64': 'aarch64', 'amd64': 'x86_64', 'x86_64': 'x86_64'}.get(platform.machine().lower())
+            if windows_arch is None:
+                raise ValueError('Unsupported Windows Python architecture')
+            # uv otherwise prefers an emulated x86_64 interpreter on Windows ARM.
+            request = f'cpython-{PYTHON_VERSION}-windows-{windows_arch}-none'
+        subprocess.run([str(uv), 'python', 'install', request, '--no-bin', '--no-registry'], env=env, check=True)
         installed = list((Path(temporary) / 'managed').glob('cpython-*'))
         if len(installed) != 1:
             raise ValueError('Expected one managed CPython distribution')
@@ -100,6 +119,8 @@ def prepare(output):
         env.pop('PYTHONPATH', None)
         env.pop('PYTHONHOME', None)
         env['PYTHONNOUSERSITE'] = '1'
+        if windows_arch:
+            verify_windows_python(python, windows_arch, env)
         # Managed CPython is marked EXTERNALLY-MANAGED. We only override that
         # marker for this private staged copy, never a host/system interpreter.
         wheel_options = []

@@ -66,6 +66,35 @@ class RuntimeTests(unittest.TestCase):
             build = run.call_args_list[-1]
             self.assertEqual(build.args[0][0], str(python))
             self.assertEqual(build.kwargs['env']['PYTHONHOME'], str(python.parent))
+            self.assertEqual(build.kwargs['env']['DISTUTILS_USE_SDK'], '1')
+
+    def test_prepare_requests_native_windows_arm_python(self):
+        class StopPreparation(Exception):
+            pass
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            uv = root / 'uv.exe'
+            uv.write_bytes(b'fixture')
+
+            def execute(command, **kwargs):
+                if command[1:3] == ['python', 'install']:
+                    self.assertEqual(command[3], 'cpython-3.12.12-windows-aarch64-none')
+                    raise StopPreparation()
+
+            with patch.object(runtime.sys, 'platform', 'win32'), patch.object(runtime.platform, 'machine', return_value='ARM64'), patch.object(runtime.subprocess, 'run', side_effect=execute), patch.object(runtime.subprocess, 'check_output', return_value=str(uv)), patch.object(runtime.tempfile, 'TemporaryDirectory', wraps=tempfile.TemporaryDirectory) as staging:
+                with self.assertRaises(StopPreparation):
+                    runtime.prepare(root / 'assets')
+                self.assertTrue(staging.call_args.kwargs['ignore_cleanup_errors'])
+
+    def test_runtime_architecture_rejects_emulated_python(self):
+        with patch.object(runtime.subprocess, 'check_output', return_value='win-amd64\n'):
+            with self.assertRaisesRegex(ValueError, 'win-arm64'):
+                runtime.verify_windows_python(Path('python.exe'), 'aarch64', {})
+        with patch.object(runtime.subprocess, 'check_output', return_value='win-arm64\n'):
+            runtime.verify_windows_python(Path('python.exe'), 'aarch64', {})
+        with patch.object(runtime.subprocess, 'check_output', return_value='win-amd64\n'):
+            runtime.verify_windows_python(Path('python.exe'), 'x86_64', {})
 
     def test_runtime_layout_is_platform_specific(self):
         root = Path('Resources')

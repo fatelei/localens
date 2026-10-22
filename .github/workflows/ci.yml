@@ -5,6 +5,11 @@ on:
     branches: ['**']
   pull_request:
   workflow_dispatch:
+    inputs:
+      full_release:
+        description: Build and verify complete offline packages without publishing a Release
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -18,3 +23,4 @@ jobs:
     uses: ./.github/workflows/checks.yml
     with:
       version: dev-${{ github.sha }}
+      full_release: ${{ inputs.full_release || false }}
