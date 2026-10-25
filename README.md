@@ -107,6 +107,8 @@ The preference file has this shape; the example selects English while keeping th
 
 `editor: ""` means the system default application. The optional legacy `python` key is for source/development environments without bundled assets; complete releases prefer their own interpreter and do not require this field. When the preference file is absent, the defaults in the Settings table apply. Use Settings for normal changes. If editing the file manually, stop Shiwa first and restart afterward; there is no live configuration-file watcher. Settings are written through a temporary file and rename.
 
+Unchanged polling scans keep visited row IDs in memory and do not update document rows or grow the SQLite WAL merely to mark files as seen. New or modified files still grow the index: extracted text, full-text postings, chunk metadata and semantic vectors all consume disk space. Compaction can reclaim unused pages, but cannot remove live indexed content.
+
 The database contains extracted text, OCR output and vectors. It is local storage, not an encrypted vault. Keep application data under your normal account protections.
 
 ### Environment variables
@@ -379,7 +381,25 @@ Further implementation notes: [architecture](docs/ARCHITECTURE.md), [content ind
 | The model reports missing Python modules | Verify the complete archive was extracted with its Resources directory; a developer executable alone is not a complete distribution |
 | A first search is slower | Cold storage, common-term verification, indexing and initial model loading can add latency; keyword search does not require model inference |
 
-To reclaim unused SQLite pages, quit the desktop app, back up the data directory, and run the maintenance utility against the database:
+### Shared text fragments and offline migration
+
+New catalogs store extracted text in content-addressed Unicode fragments. Identical fragments share their text and full-text postings; ordered per-file references preserve complete previews, snippets and code line numbers. Content-defined boundaries use 4K–16K characters, with up to 499 characters of overlap so supported queries of up to 500 characters still match across boundaries. A SHA-256 key is checked against the exact bytes before sharing. Deleting one file removes only its references; the last reference collects the fragment and its lexical postings. Semantic chunks and vectors remain per file because model input includes the filename.
+
+Existing populated catalogs remain readable in their legacy format until an explicit offline migration. Estimate text savings without changing the catalog:
+
+```sh
+go run -tags sqlite_fts5 ./cmd/index-maintenance -db "$HOME/Library/Application Support/Localens/index.db" -analyze
+```
+
+The estimate includes fragment overlap, but excludes reference/index overhead and filesystem free-page reclamation. It is not a guaranteed final database size. To migrate, quit the desktop application, keep a backup of the closed database, then run:
+
+```sh
+go run -tags sqlite_fts5 ./cmd/index-maintenance -db /path/to/working-copy.db -deduplicate -verify-against /path/to/original.db
+```
+
+Migration changes schema, references and postings in one transaction; failures roll back. The maintenance process starts no background OCR or indexing. After compaction, `-verify-against` checks every file body and metadata row, every semantic chunk/vector, roots and foreign keys against the original. Use the optimized copy only after verification succeeds. Older application binaries cannot read the shared schema; restore the original database when rolling back to an older binary. The source files are never changed.
+
+To reclaim unused SQLite pages without changing the storage schema, quit the desktop app, back up the data directory, and run the maintenance utility against the database:
 
 ```sh
 go run ./cmd/index-maintenance -db "$HOME/Library/Application Support/Localens/index.db"

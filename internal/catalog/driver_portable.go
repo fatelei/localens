@@ -14,6 +14,25 @@ import (
 const databaseDriver = "sqlite"
 
 var registerUnicodeLower = sync.OnceValue(func() error {
+	if err := sqlite.RegisterDeterministicScalarFunction("fragment_tail", 2, func(_ *sqlite.FunctionContext, args []driver.Value) (driver.Value, error) {
+		body, _ := args[0].(string)
+		if b, ok := args[0].([]byte); ok {
+			body = string(b)
+		}
+		skip, _ := args[1].(int64)
+		return []byte(fragmentTail(body, skip)), nil
+	}); err != nil {
+		return err
+	}
+	if err := sqlite.RegisterDeterministicScalarFunction("body_fragments", 1, func(_ *sqlite.FunctionContext, args []driver.Value) (driver.Value, error) {
+		body, _ := args[0].(string)
+		if b, ok := args[0].([]byte); ok {
+			body = string(b)
+		}
+		return bodyFragmentsJSON(body), nil
+	}); err != nil {
+		return err
+	}
 	if err := sqlite.RegisterDeterministicScalarFunction("keyword_rank", 3, func(_ *sqlite.FunctionContext, args []driver.Value) (driver.Value, error) {
 		name, _ := args[0].(string)
 		body, _ := args[1].(string)

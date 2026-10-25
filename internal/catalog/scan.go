@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 )
@@ -38,6 +39,8 @@ func (s *Store) Scan(ctx context.Context, progress func(ScanProgress)) error {
 	}
 	for _, root := range roots {
 		var unreadable []string
+		// Keep compact row IDs in memory instead of rewriting every document on each poll.
+		var unchanged []int64
 		process := func(path string, d fs.DirEntry, walkErr error) error {
 			if err := ctx.Err(); err != nil {
 				return err
@@ -76,12 +79,14 @@ func (s *Store) Scan(ctx context.Context, progress func(ScanProgress)) error {
 			p.Current = path
 			placeholder := isPlaceholder(info)
 			var previousPlaceholder bool
-			var size, modified int64
-			err = s.db.QueryRowContext(ctx, "SELECT size,modified,placeholder FROM files WHERE path=?", path).Scan(&size, &modified, &previousPlaceholder)
+			var rowID, size, modified int64
+			err = s.db.QueryRowContext(ctx, "SELECT rowid,size,modified,placeholder FROM files WHERE path=?", path).Scan(&rowID, &size, &modified, &previousPlaceholder)
 			if err == nil && size == info.Size() && modified == info.ModTime().UnixNano() && (placeholder == previousPlaceholder || placeholder) {
-				_, err = s.db.ExecContext(ctx, "UPDATE files SET seen=?,placeholder=? WHERE path=?", generation, placeholder, path)
-				if err != nil {
-					return err
+				unchanged = append(unchanged, rowID)
+				if placeholder != previousPlaceholder {
+					if _, err = s.db.ExecContext(ctx, "UPDATE files SET placeholder=? WHERE path=?", placeholder, path); err != nil {
+						return err
+					}
 				}
 				if progress != nil && p.Processed%20 == 0 {
 					progress(p)
@@ -106,7 +111,11 @@ func (s *Store) Scan(ctx context.Context, progress func(ScanProgress)) error {
 			if err != nil {
 				return err
 			}
-			_, err = tx.ExecContext(ctx, `INSERT INTO files(path,root,name,kind,size,modified,body,seen,placeholder) VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(path) DO UPDATE SET root=excluded.root,name=excluded.name,kind=excluded.kind,size=excluded.size,modified=excluded.modified,body=excluded.body,seen=excluded.seen,placeholder=excluded.placeholder`, path, root.Path, filepath.Base(path), kind, info.Size(), info.ModTime().UnixNano(), body, generation, placeholder)
+			if rowID == 0 {
+				_, err = tx.ExecContext(ctx, `INSERT INTO files(path,root,name,kind,size,modified,body,seen,placeholder) VALUES(?,?,?,?,?,?,?,?,?)`, path, root.Path, filepath.Base(path), kind, info.Size(), info.ModTime().UnixNano(), body, generation, placeholder)
+			} else {
+				_, err = tx.ExecContext(ctx, `UPDATE files SET root=?,name=?,kind=?,size=?,modified=?,body=?,seen=?,placeholder=? WHERE path=?`, root.Path, filepath.Base(path), kind, info.Size(), info.ModTime().UnixNano(), body, generation, placeholder, path)
+			}
 			if err == nil {
 				_, err = tx.ExecContext(ctx, "DELETE FROM chunks WHERE path=?", path)
 			}
@@ -162,7 +171,7 @@ func (s *Store) Scan(ctx context.Context, progress func(ScanProgress)) error {
 		if err != nil {
 			return err
 		}
-		if err = s.cleanUnseen(ctx, root.Path, generation, unreadable); err != nil {
+		if err = s.cleanUnseen(ctx, root.Path, generation, unreadable, unchanged); err != nil {
 			return err
 		}
 
@@ -200,21 +209,29 @@ func (s *Store) skipDirectory(root, path, name string) bool {
 }
 
 // cleanUnseen preserves inaccessible subtrees, but removes stale files elsewhere.
-func (s *Store) cleanUnseen(ctx context.Context, root string, generation int64, unreadable []string) error {
-	if len(unreadable) == 0 {
+func (s *Store) cleanUnseen(ctx context.Context, root string, generation int64, unreadable []string, unchanged []int64) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if len(unreadable) == 0 && len(unchanged) == 0 {
 		_, err := s.db.ExecContext(ctx, "DELETE FROM files WHERE root=? AND seen<>?", root, generation)
 		return err
 	}
-	rows, err := s.db.QueryContext(ctx, "SELECT path FROM files WHERE root=? AND seen<>?", root, generation)
+	rows, err := s.db.QueryContext(ctx, "SELECT rowid,path FROM files WHERE root=? AND seen<>?", root, generation)
 	if err != nil {
 		return err
 	}
+	slices.Sort(unchanged)
 	var stale []string
 	for rows.Next() {
+		var id int64
 		var path string
-		if err = rows.Scan(&path); err != nil {
+		if err = rows.Scan(&id, &path); err != nil {
 			rows.Close()
 			return err
+		}
+		if _, found := slices.BinarySearch(unchanged, id); found {
+			continue
 		}
 		protected := false
 		for _, failed := range unreadable {
@@ -231,6 +248,9 @@ func (s *Store) cleanUnseen(ctx context.Context, root string, generation int64, 
 	rows.Close()
 	if err != nil {
 		return err
+	}
+	if len(stale) == 0 {
+		return ctx.Err()
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {

@@ -16,6 +16,12 @@ const databaseDriver = "localens_native_sqlite"
 // SQLite for large document scans on the desktop release.
 var registerUnicodeLower = sync.OnceValue(func() error {
 	sql.Register(databaseDriver, &sqlite.SQLiteDriver{ConnectHook: func(conn *sqlite.SQLiteConn) error {
+		if err := conn.RegisterFunc("fragment_tail", func(body []byte, skip int64) []byte { return []byte(fragmentTail(string(body), skip)) }, true); err != nil {
+			return err
+		}
+		if err := conn.RegisterFunc("body_fragments", func(body []byte) string { return bodyFragmentsJSON(string(body)) }, true); err != nil {
+			return err
+		}
 		if err := conn.RegisterFunc("keyword_rank", keywordRank, true); err != nil {
 			return err
 		}

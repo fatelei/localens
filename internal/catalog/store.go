@@ -78,7 +78,13 @@ func databaseFileURL(path string) *url.URL {
 }
 
 // Open creates or opens the private on-disk database.
-func Open(path string) (*Store, error) {
+func Open(path string) (*Store, error) { return openStore(path, true) }
+
+// OpenForMaintenance must only be used while the desktop app is stopped.
+// It deliberately starts no OCR or full-text backfill workers.
+func OpenForMaintenance(path string) (*Store, error) { return openStore(path, false) }
+
+func openStore(path string, background bool) (*Store, error) {
 	if err := registerUnicodeLower(); err != nil {
 		return nil, err
 	}
@@ -97,17 +103,28 @@ func Open(path string) (*Store, error) {
 		return nil, err
 	}
 	db.SetMaxOpenConns(1)
-	_, err = db.Exec(`PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000; PRAGMA foreign_keys=ON;
- CREATE TABLE IF NOT EXISTS roots(path TEXT PRIMARY KEY);
- CREATE TABLE IF NOT EXISTS files(path TEXT PRIMARY KEY,root TEXT NOT NULL REFERENCES roots(path) ON DELETE CASCADE,name TEXT NOT NULL,kind TEXT NOT NULL,size INTEGER NOT NULL,modified INTEGER NOT NULL,body TEXT NOT NULL,seen INTEGER NOT NULL,placeholder INTEGER NOT NULL DEFAULT 0);
- CREATE INDEX IF NOT EXISTS files_root ON files(root);
- CREATE INDEX IF NOT EXISTS files_kind ON files(kind);
- CREATE TABLE IF NOT EXISTS chunks(id INTEGER PRIMARY KEY,path TEXT NOT NULL REFERENCES files(path) ON DELETE CASCADE,body TEXT NOT NULL,vector BLOB);
- CREATE INDEX IF NOT EXISTS chunks_path ON chunks(path);`)
+	_, err = db.Exec(`PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000; PRAGMA foreign_keys=ON; CREATE TABLE IF NOT EXISTS roots(path TEXT PRIMARY KEY);`)
 	if err != nil {
 		db.Close()
 		return nil, err
 	}
+	var shared int
+	if err = db.QueryRow("SELECT count(*) FROM sqlite_master WHERE name='shared_body_schema'").Scan(&shared); err != nil {
+		db.Close()
+		return nil, err
+	}
+	if shared == 0 {
+		_, err = db.Exec(`CREATE TABLE IF NOT EXISTS files(path TEXT PRIMARY KEY,root TEXT NOT NULL REFERENCES roots(path) ON DELETE CASCADE,name TEXT NOT NULL,kind TEXT NOT NULL,size INTEGER NOT NULL,modified INTEGER NOT NULL,body TEXT NOT NULL,seen INTEGER NOT NULL,placeholder INTEGER NOT NULL DEFAULT 0);
+ CREATE INDEX IF NOT EXISTS files_root ON files(root);
+ CREATE INDEX IF NOT EXISTS files_kind ON files(kind);
+ CREATE TABLE IF NOT EXISTS chunks(id INTEGER PRIMARY KEY,path TEXT NOT NULL REFERENCES files(path) ON DELETE CASCADE,body TEXT NOT NULL,vector BLOB);
+ CREATE INDEX IF NOT EXISTS chunks_path ON chunks(path);`)
+		if err != nil {
+			db.Close()
+			return nil, err
+		}
+	}
+
 	var placeholderColumns int
 	if err = db.QueryRow("SELECT COUNT(*) FROM pragma_table_info('files') WHERE name='placeholder'").Scan(&placeholderColumns); err != nil {
 		db.Close()
@@ -153,7 +170,24 @@ func Open(path string) (*Store, error) {
 		return nil, err
 	}
 	s := &Store{db: db, readDB: reader, dbPath: absPath}
-	s.startContentWork()
+	if shared == 0 {
+		var populated bool
+		if err = db.QueryRow("SELECT EXISTS(SELECT 1 FROM files LIMIT 1)").Scan(&populated); err != nil {
+			reader.Close()
+			db.Close()
+			return nil, err
+		}
+		if !populated {
+			if err = s.DeduplicateContent(context.Background()); err != nil {
+				reader.Close()
+				db.Close()
+				return nil, err
+			}
+		}
+	}
+	if background {
+		s.startContentWork()
+	}
 	return s, nil
 }
 
@@ -342,7 +376,7 @@ func (s *Store) VerifiedPath(ctx context.Context, path string) (File, error) {
 // Body returns indexed text for the preview panel.
 func (s *Store) Body(ctx context.Context, path string) (string, error) {
 	var body string
-	err := s.db.QueryRowContext(ctx, "SELECT body FROM files WHERE path=?", path).Scan(&body)
+	err := s.db.QueryRowContext(ctx, "SELECT CAST(body AS BLOB) FROM files WHERE path=?", path).Scan(&body)
 	return body, err
 }
 

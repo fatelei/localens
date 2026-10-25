@@ -10,6 +10,13 @@ import (
 
 // initializeFullText creates the compact postings index and a restartable backfill queue.
 func initializeFullText(db *sql.DB) error {
+	var shared int
+	if err := db.QueryRow("SELECT count(*) FROM sqlite_master WHERE name='shared_body_schema'").Scan(&shared); err != nil {
+		return err
+	}
+	if shared != 0 {
+		return initializeSharedFullText(db)
+	}
 	tx, err := db.Begin()
 	if err != nil {
 		return err

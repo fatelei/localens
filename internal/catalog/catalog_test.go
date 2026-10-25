@@ -378,7 +378,7 @@ func TestHydrationRefreshesBodyWithoutSizeOrMtimeChanges(t *testing.T) {
 }
 
 func TestOldCatalogPlaceholderMigrationPreservesFiles(t *testing.T) {
-	s, root := fixture(t)
+	s, root := legacyFixture(t)
 	put(t, filepath.Join(root, "old.txt"), "旧索引正文")
 	scan(t, s)
 	var path string
@@ -413,7 +413,7 @@ func TestUnseenCleanupProtectsOnlyInaccessibleSubtree(t *testing.T) {
 	if err := s.Scan(t.Context(), nil); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.cleanUnseen(t.Context(), root, time.Now().UnixNano(), []string{locked}); err != nil {
+	if err := s.cleanUnseen(t.Context(), root, time.Now().UnixNano(), []string{locked}, nil); err != nil {
 		t.Fatal(err)
 	}
 	result, err := s.Search(t.Context(), "", "all", nil)
