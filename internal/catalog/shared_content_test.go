@@ -242,9 +242,6 @@ func TestSharedMigrationRollbackAndEmbeddedNUL(t *testing.T) {
 	if err = s.DeduplicateContent(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	if err = s.VerifyContentAgainst(t.Context(), s.dbPath); err != nil {
-		t.Fatal(err)
-	}
 	got, err = s.Body(t.Context(), path)
 	if err != nil || got != body {
 		t.Fatal("NUL or Unicode lost", err)
@@ -276,10 +273,28 @@ func TestSharedVerificationDetectsChangedContent(t *testing.T) {
 	if err := s.VerifyContentAgainst(t.Context(), original); err != nil {
 		t.Fatal(err)
 	}
+	var attached int
+	if err := s.readDB.QueryRow("SELECT count(*) FROM pragma_database_list WHERE name='original'").Scan(&attached); err != nil || attached != 0 {
+		t.Fatalf("source still attached: %d %v", attached, err)
+	}
 	if _, err := s.db.Exec("UPDATE files SET body='different content' WHERE path=?", path); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.VerifyContentAgainst(t.Context(), original); err == nil {
 		t.Fatal("changed body passed verification")
+	}
+}
+
+func TestSharedVerificationRejectsSameDatabase(t *testing.T) {
+	s, _ := fixture(t)
+	if err := s.VerifyContentAgainst(t.Context(), s.dbPath); err == nil {
+		t.Fatal("verification must reject attaching the same database twice")
+	}
+	alias := filepath.Join(filepath.Dir(s.dbPath), "same-index.db")
+	if err := os.Link(s.dbPath, alias); err != nil {
+		t.Skipf("hard links unavailable: %v", err)
+	}
+	if err := s.VerifyContentAgainst(t.Context(), alias); err == nil {
+		t.Fatal("hard-linked database must also be rejected")
 	}
 }

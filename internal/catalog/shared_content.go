@@ -4,9 +4,12 @@ import (
 	"context"
 	"crypto/sha256"
 	"database/sql"
+	"database/sql/driver"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"os"
 	"time"
 )
 
@@ -297,7 +300,21 @@ func AnalyzeDatabase(ctx context.Context, path string) (ContentStorageAnalysis, 
 
 // VerifyContentAgainst checks every reconstructed body/metadata row, root and
 // semantic chunk against an offline source database before the new copy is used.
-func (s *Store) VerifyContentAgainst(ctx context.Context, path string) error {
+func (s *Store) VerifyContentAgainst(ctx context.Context, path string) (resultErr error) {
+	current, err := os.Stat(s.dbPath)
+	if err != nil {
+		return err
+	}
+	source, err := os.Stat(path)
+	if err != nil {
+		return err
+	}
+	// Attaching the same file (even under another name) is not an independent
+	// integrity check and can retain duplicate Windows file handles.
+	if os.SameFile(current, source) {
+		return errors.New("verification requires a separate original database file")
+	}
+
 	conn, err := s.readDB.Conn(ctx)
 	if err != nil {
 		return err
@@ -310,7 +327,13 @@ func (s *Store) VerifyContentAgainst(ctx context.Context, path string) error {
 	if _, err = conn.ExecContext(ctx, "ATTACH DATABASE ? AS original", uri.String()); err != nil {
 		return err
 	}
-	defer conn.ExecContext(context.Background(), "DETACH DATABASE original")
+	defer func() {
+		if _, err := conn.ExecContext(context.Background(), "DETACH DATABASE original"); err != nil {
+			// Never return a connection with an attached source to the reader pool.
+			_ = conn.Raw(func(any) error { return driver.ErrBadConn })
+			resultErr = errors.Join(resultErr, fmt.Errorf("detach verification source: %w", err))
+		}
+	}()
 	checks := []string{
 		`SELECT (SELECT count(*) FROM main.files)<>(SELECT count(*) FROM original.files)`,
 		`SELECT EXISTS(SELECT 1 FROM original.files o LEFT JOIN main.files f ON f.path=o.path WHERE f.path IS NULL OR f.root IS NOT o.root OR f.name IS NOT o.name OR f.kind IS NOT o.kind OR f.size IS NOT o.size OR f.modified IS NOT o.modified OR f.body IS NOT o.body OR f.placeholder IS NOT o.placeholder OR f.ocr_version IS NOT o.ocr_version OR f.ocr_error IS NOT o.ocr_error)`,
